@@ -6,6 +6,8 @@
 #       镜像已含依赖,故不安装 requirements_hcu.txt;流程 = AOT kernel + editable sglang。
 #       build-aot-kernel 只编译算子并离线安装本地 wheel(--no-deps/--no-index),
 #       不从 PyPI 下载/更新任何依赖(镜像已够);失败停在该命令,不做自愈。
+#       kernel 编译要求本机 rustc/cargo >= 1.85:build-aot-kernel 前先校验版本,
+#       缺失或不足会自动升级 Rust 工具链(>= 1.85)再继续编译;升级失败或仍不足才 FATAL。
 #   成功 -> exit 0,日志末行 RESULT=OK
 #   失败 -> 停在该命令,exit 非 0,日志末行 RESULT=FATAL stage=...
 #        stage: clone|uninstall-kernel|build-aot-kernel|install-editable|verify-import|verify-kernel
@@ -20,7 +22,7 @@
 set -Eeuo pipefail
 
 AUTO_WORK="${AUTO_WORK:-/home/auto-work}"
-RESULT_ROOT="${RESULT_ROOT:-/home/run}"
+RESULT_ROOT="${RESULT_ROOT:-/home/runs}"
 SRC_DIR="/home/sglang-das"
 GIT_REPO="https://github.com/HYGON-AI/sglang-das.git"
 FAILURE_LOG_LINES=80
@@ -84,8 +86,84 @@ run_pipeline() {
   # 说明:`python3 setup_hip.py install` 会走 easy_install 自动解析安装 install_requires
   # (日志里表现为 Searching/Downloading pypi 的 torch/triton/nvidia-*),故改为
   # bdist_wheel 只编译 + pip 离线安装本地 wheel(--no-deps/--no-index);镜像已含全部依赖。
+  # ==== Rust 工具链门禁:kernel(AOT)编译要求 rustc/cargo >= 1.85(版本不足会在
+  # bdist_wheel 里报出晦涩的编译错误)。缺失/不足时 step 自动下载升级 Rust 工具链
+  # 到 >= 1.85(默认:有 rustup 则 `rustup toolchain install 1.85.0 --profile minimal`
+  # 并设为默认;无 rustup 则官方脚本 sh.rustup.rs 装 rustup + 默认 1.85.0)。整条安装
+  # 命令可用环境变量 RUST_INSTALL_CMD 覆盖(如离线/内网镜像的本地安装脚本),离线下载
+  # 较慢属正常。升级后重新校验,仍不足或升级失败才 FATAL;其它编译错误不做自愈。 ====
+  tool_rustc_ver() {
+    local v="?"
+    if command -v rustc >/dev/null 2>&1; then
+      v=$(rustc --version 2>/dev/null | awk '{print $2}' || true)
+    fi
+    printf '%s' "${v:-?}"
+  }
+  tool_cargo_ver() {
+    local v="?"
+    if command -v cargo >/dev/null 2>&1; then
+      v=$(cargo --version 2>/dev/null | awk '{print $2}' || true)
+    fi
+    printf '%s' "${v:-?}"
+  }
+  # 参数:rustc 版本、cargo 版本;两者都存在且 >= 1.85.0 才满足
+  rust_ge_185() {
+    [ "$1" != "?" ] && [ "$2" != "?" ] \
+      && printf '1.85.0\n%s\n' "$1" | sort -V -C \
+      && printf '1.85.0\n%s\n' "$2" | sort -V -C
+  }
+  # 自动安装/升级 Rust 工具链(>= 1.85);安装命令可用 RUST_INSTALL_CMD 覆盖。
+  install_rust_toolchain() {
+    local cmd=""
+    if [ -n "${RUST_INSTALL_CMD:-}" ]; then
+      cmd=$RUST_INSTALL_CMD
+      printf '[compile-sglang] 使用环境变量 RUST_INSTALL_CMD 指定的安装命令\n' >>"$logf"
+    elif command -v rustup >/dev/null 2>&1; then
+      cmd="rustup toolchain install 1.85.0 --profile minimal && rustup default 1.85.0"
+    else
+      cmd="curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.85.0 --profile minimal"
+    fi
+    printf '[compile-sglang] rust 工具链缺失或 < 1.85,自动升级(要求 >= 1.85.0,下载可能较慢)...\n' >>"$logf"
+    printf '\n===== [compile] STAGE=build-aot-kernel cmd: rust 工具链自动升级: %s =====\n' "$cmd" >>"$logf"
+    if ! eval "$cmd" >>"$logf" 2>&1; then
+      printf '[compile-sglang] RESULT=FATAL stage=build-aot-kernel reason="Rust 工具链自动升级失败(kernel 编译要求 >= 1.85.0);请检查网络,或设置环境变量 RUST_INSTALL_CMD 指定可用的安装命令(如离线镜像脚本)后重试"\n' >>"$logf"
+      return 1
+    fi
+    # rustup 默认装到 $CARGO_HOME(缺省 ~/.cargo),把其 bin 加入 PATH 以替换系统旧版 rustc/cargo
+    export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+    [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env" || true
+    hash -r 2>/dev/null || true
+    printf '[compile-sglang] rust 工具链升级命令执行完成,重新校验版本\n' >>"$logf"
+    return 0
+  }
+  # 门禁:满足则放行;缺失/不足 -> 自动升级一次 -> 重查;仍不足/升级失败才 FATAL。
+  check_rust_toolchain() {
+    local st=$1 rustc_ver cargo_ver
+    rustc_ver=$(tool_rustc_ver)
+    cargo_ver=$(tool_cargo_ver)
+    if ! rust_ge_185 "$rustc_ver" "$cargo_ver"; then
+      if [ "$rustc_ver" = "?" ] || [ "$cargo_ver" = "?" ]; then
+        printf '[compile-sglang] 缺少或无法解析 rustc/cargo(rustc=%s cargo=%s),kernel 编译要求 >= 1.85.0,自动安装...\n' "$rustc_ver" "$cargo_ver" >>"$logf"
+      else
+        printf '[compile-sglang] rustc/cargo 版本不足:要求 >= 1.85.0,当前 rustc=%s cargo=%s,自动升级...\n' "$rustc_ver" "$cargo_ver" >>"$logf"
+      fi
+      install_rust_toolchain || return 1
+      rustc_ver=$(tool_rustc_ver)
+      cargo_ver=$(tool_cargo_ver)
+    fi
+    if ! rust_ge_185 "$rustc_ver" "$cargo_ver"; then
+      printf '[compile-sglang] RESULT=FATAL stage=%s reason="自动升级后 rustc/cargo 仍不足:要求 >= 1.85.0,当前 rustc=%s cargo=%s;请检查安装命令,或设置 RUST_INSTALL_CMD 指定可用安装命令后重试"\n' \
+        "$st" "$rustc_ver" "$cargo_ver" >>"$logf"
+      return 1
+    fi
+    printf '[compile-sglang] rust 工具链满足要求:rustc=%s cargo=%s(要求 >= 1.85.0)\n' "$rustc_ver" "$cargo_ver" >>"$logf"
+    return 0
+  }
+  # ==== end rust toolchain guard ====
+
   build_aot_kernel_stage() {
     local src=$1 wd="$1/python/sglang/kernels/aot" whl=""
+    check_rust_toolchain build-aot-kernel || return 1
     printf '\n===== [compile] STAGE=build-aot-kernel cmd: python3 setup_hip.py bdist_wheel (cwd=%s) =====\n' "$wd" >>"$logf"
     if ! ( cd "$wd" && python3 setup_hip.py bdist_wheel ) >>"$logf" 2>&1; then
       printf '[compile-sglang] RESULT=FATAL stage=build-aot-kernel\n' >>"$logf"

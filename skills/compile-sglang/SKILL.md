@@ -11,7 +11,7 @@ whenToUse: '用户要求编译/构建/安装/重装 sglang 或 sgl-kernel(HCU/RO
 ## 路径
 
 - STEP 脚本:`${AUTO_WORK:-/home/auto-work}/steps/compile-sglang.sh`
-- 结果根:`/home/run`(日志/pid/json 写这里)
+- 结果根:`/home/runs`(日志/pid/json 写这里)
 
 ## 输入
 
@@ -21,7 +21,7 @@ whenToUse: '用户要求编译/构建/安装/重装 sglang 或 sgl-kernel(HCU/RO
 ## 说明(本环境)
 
 - 镜像已含运行/编译依赖,**不再安装 requirements_hcu.txt**(step 已删除该步)。
-- `build-aot-kernel` **只编译算子**:产物走本地 wheel 离线安装(`bdist_wheel` + `pip3 install --no-deps --no-index`),**不从 PyPI 下载/更新任何依赖**(镜像已够,不再自动下载 rust 等)。**任何失败不做自愈**,直接失败汇报(看 stage 与日志尾部)。
+- `build-aot-kernel` **只编译算子**:产物走本地 wheel 离线安装(`bdist_wheel` + `pip3 install --no-deps --no-index`),**不从 PyPI 下载/更新任何依赖**。kernel 编译要求本机 `rustc`/`cargo` **≥ 1.85**:step 在 build-aot-kernel 前先校验版本,缺失或不足时**自动下载/升级 Rust 工具链**(默认 rustup,无 rustup 则官方脚本 `sh.rustup.rs` 装 1.85.0;整条安装命令可用环境变量 `RUST_INSTALL_CMD` 覆盖)并**继续编译(自动重试)**;仅当升级失败或升级后仍不足才失败。**其它失败不做自愈**,直接失败汇报(看 stage 与日志尾部)。
 
 ## 执行流程
 
@@ -35,7 +35,7 @@ whenToUse: '用户要求编译/构建/安装/重装 sglang 或 sgl-kernel(HCU/RO
 
 ```bash
 bash "${AUTO_WORK:-/home/auto-work}/steps/compile-sglang.sh" start \
-  --src-dir "<源码目录>" --result-root "/home/run"
+  --src-dir "<源码目录>" --result-root "/home/runs"
 ```
 
 预期输出:`COMPILE_RESULT=STARTED pid=... log=... run_dir=...`。记下 pid 与 log。
@@ -44,7 +44,7 @@ bash "${AUTO_WORK:-/home/auto-work}/steps/compile-sglang.sh" start \
 
 ```bash
 bash "${AUTO_WORK:-/home/auto-work}/steps/compile-sglang.sh" wait <pid> 50 \
-  --result-root "/home/run"
+  --result-root "/home/runs"
 ```
 
 循环调用直到出现 `COMPILE_STATE=done`;单次 wait 超过 50s 没结束属正常(会返回 running),继续下一次 wait。**上限**:累计约 2.5 小时仍 running → 按"仍在进行"汇报并给 log,让用户决定是否继续等。
@@ -63,6 +63,6 @@ bash "${AUTO_WORK:-/home/auto-work}/steps/compile-sglang.sh" wait <pid> 50 \
 ## 纪律
 
 1. 只做编译+验证这一件事;不跑评测/压测、不装无关依赖、不动 auto-work 以外路径。
-2. 失败即停(step 已保证):不要自动改安装策略重试;若日志显示 `--no-index` 缺 wheel,把缺失包与精确失败命令汇报给用户,不悄悄改策略。
+2. 失败即停(step 已保证):除 Rust 工具链不足时由 step **自动升级后继续编译**外,不要自动改安装策略重试;若日志显示 `--no-index` 缺 wheel,把缺失包与精确失败命令汇报给用户,不悄悄改策略。若失败为 Rust 自动升级失败/升级后仍 < 1.85,汇报当前版本、要求(≥ 1.85)与 `RUST_INSTALL_CMD` 覆盖方式。
 3. 中途不要在另一终端并发跑 pip/编译;结束后不需要清理(产物/日志留作证据)。
 4. 一次一任务:汇报后任务结束;如需重编,用户另发起。
