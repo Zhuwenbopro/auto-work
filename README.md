@@ -46,7 +46,7 @@ auto-work/                       # 代码根(默认部署到容器 /home/auto-wo
 │  ├─ compile-sglang/SKILL.md    #   编译/安装 sglang(默认源码 /home/sglang-das)
 │  ├─ adapt-start/SKILL.md       #   新版本启动适配循环(照 origin/v0.5.12_dev 移植;成功用 release-server 收尾)
 │  ├─ eval/SKILL.md              #   EvalScope 评测(默认评测完停服释放;附着模式可不停)
-│  ├─ bench-serving/SKILL.md     #   bench_serving 压测(长度对×并发网格;默认压完停服释放)
+│  ├─ bench/SKILL.md     #   bench_serving 压测(长度对×并发网格;默认压完停服释放)
 │  ├─ tracing/SKILL.md           #   Torch Profiler 短 trace 采集(默认采完停服释放)
 │  └─ fix-auto-work/SKILL.md     #   自我维护:改 auto-work 自身文件并同步到技能安装目录
 └─ tests/                        # 服务器端回归护栏(fake 客户端,不碰 GPU;见 tests/README.md)
@@ -78,7 +78,7 @@ auto-work/                       # 代码根(默认部署到容器 /home/auto-wo
 | `compile-sglang` | 编译安装 sglang-das(镜像已含依赖,不装 requirements) | compile-sglang | `用 compile-sglang 技能编译 sglang` |
 | `adapt-start` | 新版本启动报代码错误 → 照 `origin/v0.5.12_dev` 移植 → 循环到能启动 → curl 验乱码 → release-server 收尾 | adapt-attempt + curl-smoke + release-server | `用 adapt-start 技能:适配当前 sglang 让它能启动,命令用 /home/server_command.sh` |
 | `eval` | 对服务跑 EvalScope 评测(数据集/limit/batch/thinking),默认评测完停服释放 | start-server + run-eval + release-server | `用 eval 技能评测 math500,limit 32` |
-| `bench-serving` | 对服务跑 bench_serving 压测(长度对×并发),默认压完停服释放 | start-server + run-bench + release-server | `用 bench-serving 技能压测 4096/1024,并发 1,2,4,8` |
+| `bench` | 对服务跑 bench_serving 压测(长度对×并发),默认压完停服释放 | start-server + run-bench + release-server | `用 bench 技能压测 4096/1024,并发 1,2,4,8` |
 | `tracing` | 对服务采 1 次 Torch Profiler trace(默认采完停服释放) | start-server + run-profile + release-server | `用 tracing 技能采集 profile,输入长 2048` |
 | `fix-auto-work` | 改 auto-work 自身(skill/step/config)并同步安装目录 | —(文件操作) | `用 fix-auto-work 技能:以后 start-server 没贴命令时直接用 /home/server_command.sh` |
 
@@ -149,7 +149,7 @@ cd /home
 dsh --profile headless "用 start-server 技能启动服务,命令用 /home/server_command.sh"
 dsh --profile headless "用 adapt-start 技能:适配当前 sglang 让它能启动,命令用 /home/server_command.sh"
 dsh --profile headless "用 eval 技能评测 math500,limit 32"
-dsh --profile headless "用 bench-serving 技能压测 4096 1024,并发 1,2,4,8"
+dsh --profile headless "用 bench 技能压测 4096 1024,并发 1,2,4,8"
 dsh --profile headless "用 tracing 技能采集 profile,输入长 2048"
 ```
 

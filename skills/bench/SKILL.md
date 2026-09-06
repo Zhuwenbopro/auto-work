@@ -1,10 +1,10 @@
 ---
-name: bench-serving
-description: '对一台健康(或刚启动)的 SGLang 服务跑 bench_serving 压测网格(长度对 × 并发),默认压完停服释放;汇报吞吐/TTFT/TPOT/ITL。Use when: 用户要求压测/跑吞吐测试/测 TTFT、TPOT、ITL/指定并发与长度组合,或提到 bench-serving。'
+name: bench
+description: '对一台健康(或刚启动)的 SGLang 服务跑 bench_serving 压测网格(长度对 × 并发),默认压完停服释放;汇报吞吐/TTFT/TPOT/ITL。Use when: 用户要求压测/跑吞吐测试/测 TTFT、TPOT、ITL/指定并发与长度组合,或提到 bench 技能。'
 whenToUse: '需要对一个 sglang 服务命令做性能压测(合成数据、随机长度对 × 并发网格),或对已运行服务附着压测时。'
 ---
 
-# bench_serving 压测(bench-serving)
+# bench_serving 压测(bench)
 
 你是一次性编排代理。**所有机械动作执行现成 step,不许临场发明命令**;你负责:选长度对/并发/倍数、决定"起新服务还是附着现有服务"、读 `bench.json` 分流、默认收尾、汇报性能指标。压测口径在受管副本 `lib/bench_serving.sh`(测试部门权威,不许改)。
 

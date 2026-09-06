@@ -1,4 +1,4 @@
-# 设计:eval · bench-serving · tracing 移植为 step + skill(定稿 v1,已确认)
+# 设计:eval · bench · tracing 移植为 step + skill(定稿 v1,已确认)
 
 > 状态:草案(用户确认中)。配套实现仓库:auto-work;移植来源:`Zhuwenbopro/skills` 的
 > `eval/bench-serving/tracing` 三份 Copilot 形态 automation(测试部门脚本,视为行为权威)。
@@ -8,7 +8,7 @@
 
 | 决策点 | 结论 |
 |---|---|
-| 范围 | eval(EvalScope)+ bench-serving + tracing(profiler)三条链路;compare-eval 留后 |
+| 范围 | eval(EvalScope)+ bench + tracing(profiler)三条链路;compare-eval 留后 |
 | 执行逻辑权威 | eval 处理逻辑以 `skills/eval/automation`(测试部门)为准;bench 延续旧 `2eval.sh`/`bench_serving.sh` 客户端口径;不另起炉灶 |
 | step 拆分 | workload step(`run-eval`/`run-bench`/`run-profile`)只吃 `started.json`,零生命周期代码;新增公共 `release-server` step;起/停由 skill 组合 |
 | 收尾默认 | 一次评测/压测结束 → 默认停服释放;用户显式要求才保留 |
@@ -120,7 +120,7 @@ workload step 复用的输入:started.json 的 `port/gpus/model_name/model_path/
 | skill | 职责(薄 LLM) | 依赖 step |
 |---|---|---|
 | `eval` | 规范化数据集/limit/thinking → 组合 start-server(如需要)→ run-eval → 读 eval.json → 默认 release-server → 汇报分数 | start-server + run-eval + release-server |
-| `bench-serving` | 选长度对×并发网格/倍数 → … → run-bench → 读 bench.json → 默认 release → 汇报吞吐 | start-server + run-bench + release-server |
+| `bench` | 选长度对×并发网格/倍数 → … → run-bench → 读 bench.json → 默认 release → 汇报吞吐 | start-server + run-bench + release-server |
 | `tracing` | 选输入长/输出目录 → … → run-profile → 默认 release → 汇报 trace 路径 | start-server + run-profile + release-server |
 
 skill 纪律与 adapt-start 一致:step 命令照抄、只按 JSON 决策、不临场发明命令、汇报含产物路径。skill 只"选参数+组合",执行口径全在 step。
@@ -130,7 +130,7 @@ skill 纪律与 adapt-start 一致:step 命令照抄、只按 JSON 决策、不�
 0. start-server.sh:started.json 追加 `model_path`(增量,不破坏既有字段);
 1. `release-server.sh` + 测试(并让 adapt-start 成功路径改用它)——独立可交付;
 2. eval:`lib/eval_command.sh`(整份搬运)→ `steps/run-eval.sh` → `skills/eval` → 冒烟(小 limit);
-3. bench:搬运 bench_serving.sh → `steps/run-bench.sh` → `skills/bench-serving` → 冒烟(短网格);
+3. bench:搬运 bench_serving.sh → `steps/run-bench.sh` → `skills/bench` → 冒烟(短网格);
 4. tracing:搬运 run_profile.py → `steps/run-profile.sh` → `skills/tracing` → 冒烟;
 5. 旧 contract 测试照搬为 auto-work/tests 回归护栏(可选,见开放问题);
 6. README 增补三技能行 + 开放项勾选。
