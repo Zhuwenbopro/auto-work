@@ -11,6 +11,7 @@ cd /home/auto-work/tests
 bash run_common.test.sh
 bash eval_command.test.sh
 bash bench_serving.test.sh
+bash make_variants.test.sh
 ```
 
 每个脚本 `OK` 收尾、非零退出即失败。覆盖点:
@@ -20,6 +21,7 @@ bash bench_serving.test.sh
 | `run_common.test.sh` | started.json 读取/numeric 转换;`--server-root` 下最新 started.json 定位 |
 | `eval_command.test.sh` | humaneval 的 evalscope 调用形状(model/api-url/batch/datasets 单参数/gen-config 合并 max_tokens=4096 + enable_thinking/thinking 注入/humaneval dataset-args) |
 | `bench_serving.test.sh` | 网格单组合输出:all.csv 表头+数据行逐字、`<model>-<batch>-in<in>-out<out>.{log,jsonl}` 命名、output-file 不散落 |
+| `make_variants.test.sh` | cmp 变体生成:顺序/.order、`args.set` 覆盖、`args.add` 追加、env/env_unset 重建、非法 label 报错 |
 
 ## 说明
 
