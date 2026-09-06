@@ -25,7 +25,7 @@
 #     --multiplier N          覆盖 CONCURRENCY_MULTIPLIER(每档请求数=并发×倍数,默认 1)
 #     --bench-command PATH    覆盖受管副本(默认 ${AUTO_WORK}/lib/bench_serving.sh)
 #     --model-dir PATH        started.json 缺 model_path 时兜底(--tokenizer 用本地目录)
-#     --result-root PATH      RUN_DIR 父目录(默认 ${RUNS_DIR:-./bench_runs})
+#     --result-root PATH      RUN_DIR 父目录(默认 ${RUNS_DIR:-/home/runs})
 #     --timeout-s N           整体超时(秒;0=不限,默认不限)
 #     -h, --help
 #
@@ -113,7 +113,7 @@ read_started_json "$STARTED_JSON"
 # ---------------- 默认值与校验 ----------------
 : "${HOST:=127.0.0.1}"
 : "${SHUTDOWN_TIMEOUT:=15}"
-: "${RESULT_ROOT:=${RUNS_DIR:-./bench_runs}}"
+: "${RESULT_ROOT:=${RUNS_DIR:-/home/runs}}"
 : "${BENCH_PAIRS:=4096 1024}"
 : "${BENCH_CONCURRENCIES:=1,2,4,8,16,32,64,128}"
 : "${CONCURRENCY_MULTIPLIER:=1}"

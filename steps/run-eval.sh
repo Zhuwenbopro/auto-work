@@ -26,7 +26,7 @@
 #     --thinking true|false 覆盖 EVAL_ENABLE_THINKING(默认 false)
 #     --eval-command PATH   覆盖受管副本位置(默认 ${AUTO_WORK}/lib/eval_command.sh)
 #     --model-dir PATH      当 started.json 缺 model_path 时兜底(本地模型目录)
-#     --result-root PATH    RUN_DIR 父目录(默认 ${RUNS_DIR:-./eval_runs})
+#     --result-root PATH    RUN_DIR 父目录(默认 ${RUNS_DIR:-/home/runs})
 #     --timeout-s N         整体超时(秒;0=不限,默认不限)
 #     -h, --help
 #
@@ -118,7 +118,7 @@ read_started_json "$STARTED_JSON"
 : "${HOST:=127.0.0.1}"
 : "${HEALTH_HOST:=127.0.0.1}"
 : "${SHUTDOWN_TIMEOUT:=15}"
-: "${RESULT_ROOT:=${RUNS_DIR:-./eval_runs}}"
+: "${RESULT_ROOT:=${RUNS_DIR:-/home/runs}}"
 : "${EVAL_ENABLE_THINKING:=false}"
 : "${EVAL_BATCH:=64}"
 : "${EVAL_LIMIT:=None}"

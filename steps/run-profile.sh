@@ -26,7 +26,7 @@
 #     --request-timeout N     覆盖 PROFILE_REQUEST_TIMEOUT(默认 600,单 HTTP 调用)
 #     --trace-timeout N       覆盖 PROFILE_TRACE_TIMEOUT(默认 180,等 trace)
 #     --profile-command PATH  覆盖受管副本(默认 ${AUTO_WORK}/lib/run_profile.py)
-#     --result-root PATH      RUN_DIR 父目录(默认 ${RUNS_DIR:-./profile_runs})
+#     --result-root PATH      RUN_DIR 父目录(默认 ${RUNS_DIR:-/home/runs})
 #     --timeout-s N           整体超时(秒;0=不限,默认不限)
 #     -h, --help
 #
@@ -119,7 +119,7 @@ read_started_json "$STARTED_JSON"
 # ---------------- 默认值与校验 ----------------
 : "${HEALTH_HOST:=127.0.0.1}"
 : "${SHUTDOWN_TIMEOUT:=15}"
-: "${RESULT_ROOT:=${RUNS_DIR:-./profile_runs}}"
+: "${RESULT_ROOT:=${RUNS_DIR:-/home/runs}}"
 : "${PROFILE_INPUT_LEN:=4096}"
 : "${PROFILE_OUTPUT_LEN:=3}"
 : "${PROFILE_WARMUP_OUTPUT_LEN:=1}"

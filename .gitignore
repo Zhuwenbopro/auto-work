@@ -1,2 +1,9 @@
 __pycache__/
 *.pyc
+
+# step 误在仓库目录下起跑的防呆:运行时产物一律应落在 ${RUNS_DIR:-/home/runs}
+cmp_runs/
+eval_runs/
+bench_runs/
+profile_runs/
+runs/

@@ -20,7 +20,7 @@
 #     --baseline-command PATH    --spec 模式:基线命令文件(被生成器读取)
 #     --spec PATH                变体 spec JSON(见 lib/make_variants.py 头注释)
 #     --variant-dir DIR          直接使用现成变体目录(每子目录含 server_command.sh)
-#     --result-root PATH         本轮根父目录(默认 ${RUNS_DIR:-./cmp_runs})
+#     --result-root PATH         本轮根父目录(默认 ${RUNS_DIR:-/home/runs})
 #     --parallel N               预留:v1 仅支持 1(串行),>1 报错
 #     --max-variants N           可选护栏:变体数上限
 #     --timeout-s N              透传给每个 run-* 的整体超时(秒)
@@ -90,7 +90,7 @@ done
 [[ -n "$BASELINE" && -n "$SPEC" ]] || [[ -n "$VARIANT_DIR" ]] || \
   { echo "错误:--spec 模式需同时给 --baseline-command;或改用 --variant-dir" >&2; exit 2; }
 
-: "${RESULT_ROOT:=${RUNS_DIR:-./cmp_runs}}"
+: "${RESULT_ROOT:=${RUNS_DIR:-/home/runs}}"
 PARALLEL=${PARALLEL:-1}
 [[ "$PARALLEL" == "1" ]] || { echo "错误:--parallel > 1 尚未实现(v1 只支持串行)" >&2; exit 2; }
 
