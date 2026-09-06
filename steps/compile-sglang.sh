@@ -3,20 +3,23 @@
 # compile-sglang.sh —— step: 编译并安装 HYGON-AI sglang-das(HCU/ROCm)
 #
 # 职责:在给定源码目录把 sglang 安装进当前 Python 环境并验证(import + pip show)。
-#       镜像已含依赖,故不安装 requirements_hcu.txt;流程 = AOT kernel + editable sglang。
+#       编译前先做分支处理(--branch,缺省 main):确认目标分支在远程 origin 存在
+#       (不存在直接 FATAL,不进入编译),存在则 fetch + checkout 切到该分支;
+#       远端暂不可达但本地已有同名分支时按本地分支检出(离线/内网复用场景)。
+#       镜像已含依赖,故不安装 requirements_hcu.txt;流程 = 切分支 + AOT kernel + editable sglang。
 #       build-aot-kernel 只编译算子并离线安装本地 wheel(--no-deps/--no-index),
 #       不从 PyPI 下载/更新任何依赖(镜像已够);失败停在该命令,不做自愈。
 #       kernel 编译要求本机 rustc/cargo >= 1.92:build-aot-kernel 前先校验版本,
 #       缺失或不足会自动升级 Rust 工具链(>= 1.92)再继续编译;升级失败或仍不足才 FATAL。
 #   成功 -> exit 0,日志末行 RESULT=OK
 #   失败 -> 停在该命令,exit 非 0,日志末行 RESULT=FATAL stage=...
-#        stage: clone|uninstall-kernel|build-aot-kernel|install-editable|verify-import|verify-kernel
+#        stage: clone|checkout|uninstall-kernel|build-aot-kernel|install-editable|verify-import|verify-kernel
 # 编译很长:默认 async(后台 + pid/log),另提供 wait 轮询与 --sync 前台模式。
 #
 # 用法:
-#   bash compile-sglang.sh start    [--src-dir DIR] [--result-root DIR]   # async 启动
+#   bash compile-sglang.sh start    [--src-dir DIR] [--branch NAME] [--result-root DIR]  # async 启动
 #   bash compile-sglang.sh wait PID [max_seconds]  [--result-root DIR]    # 轮询(单次默认 ≤50s)
-#   bash compile-sglang.sh --sync   [--src-dir DIR] [--result-root DIR]   # 前台跑(直跑/调试)
+#   bash compile-sglang.sh --sync   [--src-dir DIR] [--branch NAME] [--result-root DIR]  # 前台跑(直跑/调试)
 # 退出码:0=OK 2=用法/前置失败 3=wait 看到失败 4=FATAL
 # ============================================================================
 set -Eeuo pipefail
@@ -25,6 +28,7 @@ AUTO_WORK="${AUTO_WORK:-/home/auto-work}"
 RESULT_ROOT="${RESULT_ROOT:-/home/runs}"
 SRC_DIR="/home/sglang-das"
 GIT_REPO="https://github.com/HYGON-AI/sglang-das.git"
+BRANCH="main"                    # 目标分支:缺省 main;请求带分支时由 --branch 传入
 FAILURE_LOG_LINES=80
 
 MODE="start"
@@ -32,7 +36,7 @@ PID_ARG=""
 MAX_WAIT=50
 LOG_OVERRIDE=""
 
-usage() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//' >&2; }
+usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//' >&2; }
 
 while (($#)); do
   case "$1" in
@@ -49,6 +53,9 @@ while (($#)); do
     --src-dir)
       (($# >= 2)) || { echo "缺 --src-dir 值" >&2; exit 2; }
       SRC_DIR=$2; shift 2 ;;
+    --branch)
+      (($# >= 2)) || { echo "缺 --branch 值" >&2; exit 2; }
+      BRANCH=$2; shift 2 ;;
     --result-root)
       (($# >= 2)) || { echo "缺 --result-root 值" >&2; exit 2; }
       RESULT_ROOT=$2; shift 2 ;;
@@ -59,13 +66,16 @@ while (($#)); do
   esac
 done
 
+BRANCH="${BRANCH:-main}"
+[ -n "$BRANCH" ] || BRANCH=main
+
 log() { printf '[%s] %s\n' "$(date '+%m-%d %H:%M:%S')" "$*"; }
 
 # ---------------- 内部流水线(后台进程执行体) ----------------
 run_pipeline() {
-  local src=$1 logf=$2 stage=""
+  local src=$1 logf=$2 branch=$3 stage=""
 
-  echo "===== compile-sglang 开始 src=$src python=$(python3 --version 2>&1) =====" >>"$logf"
+  echo "===== compile-sglang 开始 src=$src branch=$branch python=$(python3 --version 2>&1) =====" >>"$logf"
 
   # run_in <stage> <workdir> <cmd...>:在指定目录执行并追加日志;失败写 FATAL 标记并返回 1
   run_in() {
@@ -193,6 +203,33 @@ run_pipeline() {
     echo "==> 复用已有源码目录:$src" >>"$logf"
   fi
 
+  # 0.5 分支确认与切换:目标分支 = --branch(缺省 main,即"无分支要求=编译 main")。
+  #   远程无此分支且本地也无同名分支 -> FATAL stage=checkout(不进入编译,直接报错);
+  #   远端可达 -> fetch + 检出远端分支;远端暂不可达但本地已有同名分支 -> 按本地分支检出
+  #   (离线/内网复用场景,不阻断既有代码编译;检出冲突则停,不覆盖本地改动)。
+  if git -C "$src" ls-remote --exit-code --heads origin "$branch" >>"$logf" 2>&1; then
+    printf '\n===== [compile] STAGE=checkout cmd: git fetch origin %s && git checkout -B %s origin/%s (cwd=%s) =====\n' \
+      "$branch" "$branch" "$branch" "$src" >>"$logf"
+    if ! git -C "$src" fetch origin "$branch" >>"$logf" 2>&1 \
+      || ! git -C "$src" checkout -B "$branch" "origin/$branch" >>"$logf" 2>&1; then
+      printf '[compile-sglang] RESULT=FATAL stage=checkout reason="远端可确认分支 %s 存在,但 fetch/checkout 失败(网络中断或本地改动冲突);详见上方日志"\n' "$branch" >>"$logf"
+      return 4
+    fi
+    echo "==> 已检出远端分支:$branch" >>"$logf"
+  elif git -C "$src" rev-parse --verify -q "refs/heads/$branch" >/dev/null 2>&1; then
+    printf '[compile-sglang] 远端暂时无法确认分支 %s(网络/权限?),本地存在同名分支,按本地检出\n' "$branch" >>"$logf"
+    printf '\n===== [compile] STAGE=checkout cmd: git checkout %s (cwd=%s) =====\n' "$branch" "$src" >>"$logf"
+    if ! git -C "$src" checkout "$branch" >>"$logf" 2>&1; then
+      printf '[compile-sglang] RESULT=FATAL stage=checkout reason="切换到本地分支 %s 失败(可能有未提交改动冲突);详见上方日志"\n' "$branch" >>"$logf"
+      return 4
+    fi
+    echo "==> 已切换到本地分支:$branch" >>"$logf"
+  else
+    printf '[compile-sglang] RESULT=FATAL stage=checkout reason="目标分支 %s 不存在:远程 origin 无此分支且本地也无同名分支;可用 git -C %s ls-remote --heads origin 查看可用分支"\n' "$branch" "$src" >>"$logf"
+    return 4
+  fi
+  echo "==> 当前 HEAD:$(git -C "$src" rev-parse --short HEAD 2>/dev/null || echo '?') (branch=$branch)" >>"$logf"
+
   run_in uninstall-kernel "$src" pip3 uninstall -y sglang-kernel || return 4
 
   build_aot_kernel_stage "$src" || return 4
@@ -232,11 +269,11 @@ if [ "$MODE" = "start" ]; then
   RUN_DIR="${RESULT_ROOT}/compile-${TS}"
   mkdir -p "$RUN_DIR"
   LOGF="$RUN_DIR/compile.log"
-  setsid bash "$0" --sync --src-dir "$SRC_DIR" --result-root "$RESULT_ROOT" \
+  setsid bash "$0" --sync --src-dir "$SRC_DIR" --branch "$BRANCH" --result-root "$RESULT_ROOT" \
     --log "$LOGF" </dev/null >>"$LOGF" 2>&1 &
   PID=$!
   printf '%s\n' "$PID" >"$RUN_DIR/compile.pid"
-  echo "[compile-sglang] COMPILE_RESULT=STARTED pid=$PID src=$SRC_DIR log=$LOGF run_dir=$RUN_DIR"
+  echo "[compile-sglang] COMPILE_RESULT=STARTED pid=$PID src=$SRC_DIR branch=$BRANCH log=$LOGF run_dir=$RUN_DIR"
   exit 0
 fi
 
@@ -298,7 +335,7 @@ else
   echo "==> 编译日志:$LOGF (src=$SRC_DIR)"
 fi
 
-if run_pipeline "$SRC_DIR" "$LOGF"; then
+if run_pipeline "$SRC_DIR" "$LOGF" "$BRANCH"; then
   rc=0
 else
   rc=4
@@ -306,9 +343,9 @@ fi
 write_json "$(dirname "$LOGF")/compile.json" "$rc"
 
 if [ "$rc" = 0 ]; then
-  echo "[compile-sglang] COMPILE_RESULT=OK src=$SRC_DIR log=$LOGF"
+  echo "[compile-sglang] COMPILE_RESULT=OK src=$SRC_DIR branch=$BRANCH log=$LOGF"
 else
-  echo "[compile-sglang] COMPILE_RESULT=FATAL src=$SRC_DIR log=$LOGF"
+  echo "[compile-sglang] COMPILE_RESULT=FATAL src=$SRC_DIR branch=$BRANCH log=$LOGF"
   tail -n "$FAILURE_LOG_LINES" "$LOGF" || true
 fi
 exit "$rc"

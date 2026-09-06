@@ -1,6 +1,6 @@
 ---
 name: compile-sglang
-description: '编译并安装 HYGON-AI sglang-das 到当前 Python 环境(HCU/ROCm):编译 sgl-kernel AOT、editable 安装 sglang,并验证 import 与 kernel 包(镜像已含依赖,不装 requirements)。Use when: 用户要求编译/构建/重装 sglang、sglang-kernel、sgl-kernel、HIP/HCU 支持,或提到 compile-sglang。'
+description: '编译并安装 HYGON-AI sglang-das 到当前 Python 环境(HCU/ROCm):编译 sgl-kernel AOT、editable 安装 sglang,并验证 import 与 kernel 包(镜像已含依赖,不装 requirements);支持指定远程分支编译:请求带“<分支> 分支”(如 release/20260825_v0.5.18)时先确认该分支存在(不存在直接报错),存在则检出后编译;未指定则按 main 分支编译。Use when: 用户要求编译/构建/重装 sglang、sglang-kernel、sgl-kernel、HIP/HCU 支持,或提到 compile-sglang。'
 whenToUse: '用户要求编译/构建/安装/重装 sglang 或 sgl-kernel(HCU/ROCm)时;本技能不做 GPU 评测等其它事。'
 ---
 
@@ -16,6 +16,7 @@ whenToUse: '用户要求编译/构建/安装/重装 sglang 或 sgl-kernel(HCU/RO
 ## 输入
 
 - 源码目录:用户给了就用用户的(绝对路径);没给默认 `/home/sglang-das`(不存在才 clone,已有则复用,不删除不覆盖)。
+- 分支(可选,默认 `main`):请求里带明确分支就用该分支,否则按 `main` 分支编译。例:“用 compile-sglang 技能编译 sglang 的 `release/20260825_v0.5.18` 分支”→ 分支 = `release/20260825_v0.5.18`。
 - 其余无参数;编译装进**当前 Python 环境**,不要换环境、不要加 sudo。
 
 ## 说明(本环境)
@@ -31,16 +32,22 @@ whenToUse: '用户要求编译/构建/安装/重装 sglang 或 sgl-kernel(HCU/RO
 - 没有其它 compile-* 正在跑(检查 `${RESULT_ROOT}/compile-*/compile.pid` 对应进程是否存活);有则汇报冲突,不并发编译(会互相踩 pip/编译产物)。
 - `bash -n` 语法检查 step(一次性,防部署时文件损坏)。
 
-### 2. 启动编译(async,防单次调用超时)
+### 2. 确定分支(切换分支这一步;解析 → 传入 step)
+
+- 请求带明确分支(如“用 compile-sglang 技能编译 sglang 的 `release/20260825_v0.5.18` 分支”)→ 分支名 = “分支”二字前最近的不含空格的词/路径段(`release/20260825_v0.5.18`);请求里**没有任何分支** → `main`。
+- 分支**是否存在于远程由 step 确认,技能不要预判、不要自行拼 git 命令**:step 编译开始先进入 `stage=checkout`——分支不存在 → 直接 `RESULT=FATAL stage=checkout` 报错,不进入编译;存在 → `git fetch origin <分支>` 并检出该分支后再编译。缺省 `main` 也走同一确认+检出,保证“无分支=编译 main”;远端暂不可达但本地已有同名分支时按本地检出,离线复用不阻塞。
+- 把分支名作为 `--branch` 拼进下一条启动命令(未指定分支传 `main`)。
+
+### 3. 启动编译(async,防单次调用超时)
 
 ```bash
 bash "${AUTO_WORK:-/home/auto-work}/steps/compile-sglang.sh" start \
-  --src-dir "<源码目录>" --result-root "/home/runs"
+  --src-dir "<源码目录>" --branch "<分支,无则 main>" --result-root "/home/runs"
 ```
 
-预期输出:`COMPILE_RESULT=STARTED pid=... log=... run_dir=...`。记下 pid 与 log。
+预期输出:`COMPILE_RESULT=STARTED pid=... branch=<分支> log=... run_dir=...`。记下 pid 与 log。
 
-### 3. 轮询直到完成(可多轮,每次 wait ≤50s)
+### 4. 轮询直到完成(可多轮,每次 wait ≤50s)
 
 ```bash
 bash "${AUTO_WORK:-/home/auto-work}/steps/compile-sglang.sh" wait <pid> 50 \
@@ -49,15 +56,16 @@ bash "${AUTO_WORK:-/home/auto-work}/steps/compile-sglang.sh" wait <pid> 50 \
 
 循环调用直到出现 `COMPILE_STATE=done`;单次 wait 超过 50s 没结束属正常(会返回 running),继续下一次 wait。**上限**:累计约 2.5 小时仍 running → 按"仍在进行"汇报并给 log,让用户决定是否继续等。
 
-### 4. 汇报(严格按格式)
+### 5. 汇报(严格按格式)
 
 ```
 结果: <OK|FATAL|输入错误|仍在进行>
 - 源码目录: <路径>
-- 阶段: <失败时:stage=clone/uninstall-kernel/build-aot-kernel/install-editable/verify-import/verify-kernel>
+- 分支: <请求给出的分支,无则为 main>
+- 阶段: <失败时:stage=clone/checkout/uninstall-kernel/build-aot-kernel/install-editable/verify-import/verify-kernel>
 - 编译日志: <log 路径>
 - compile.json: <json 路径>
-- 说明: <OK = "sglang import: OK + pip show sglang-kernel 存在";失败 = 日志尾部首错摘录(几行);仍在进行 = 已等待时长>
+- 说明: <OK = "sglang import: OK + pip show sglang-kernel 存在";失败 = 日志尾部首错摘录(几行),分支不存在时应摘录 FATAL stage=checkout 的 reason;仍在进行 = 已等待时长>
 ```
 
 ## 纪律
