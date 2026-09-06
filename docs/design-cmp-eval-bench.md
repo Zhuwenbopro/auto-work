@@ -9,8 +9,8 @@
 | 决策点 | 结论 |
 |---|---|
 | 变体定义 | spec(JSON delta)+ 确定性生成器 `lib/make_variants.py`;skill 只翻译不手写完整命令 |
-| 驱动 | 新增确定性 `steps/cmp-sweep.sh`:生成变体 → parser 统一校验(任一失败不启动)→ 串行 start→run-*→release → 失败隔离 → `cmp.json` |
-| 并行度 | v1 串行;`--parallel N` 参数预留(>1 暂报错),并发调度(组分发)留作后续 |
+| 驱动 | 新增确定性 `steps/cmp-sweep.sh`:生成变体 → parser 统一校验(任一失败不启动)→ 每变体 start→run-*→release → 失败隔离 → `cmp.json`(默认串行,`--parallel N` 槽位并行) |
+| 并行度 | 默认串行;用户要求时 `--parallel N` 槽位并行(至多 N 个变体同时跑,每变体独立 start-server,靠其等卡/锁卡/flock 保证不撞卡);`--parallel` 大于变体数自动收敛;并行时各档可能落在不同卡组(汇报须注明),严格同卡组请串行 |
 | 公平性 | 所有变体用同一 workload 参数(同数据集或同网格),仅用户声明的变量不同;启动前列出全部变体、>8 先确认 |
 | 汇总粒度 | cmp.json 只做装配(每变体 ok/失败 + 产物路径 + 参数);分数/指标解读由 skill 读各变体产物汇报 |
 
@@ -54,8 +54,10 @@ skills/cmp-bench       用户语 → spec + 参数;跑 cmp-sweep --mode bench;�
 
 退出码:0 全 ok;4 partial;2 输入/任一变体 parser 校验失败(未启动任何服务)。
 
+并行示例:`cmp-sweep.sh --mode eval --baseline-command … --spec … --parallel 2`(省略 `--parallel` = 串行)。
+
 ## 后续候选
 
-- `cmp-sweep --parallel N`:GPU 组分发并发起服(承接旧 compare-eval 的 dispatch_plan 语义);
+- ~~`cmp-sweep --parallel N`~~ 已实现:槽位式并行(默认串行,用户要求时开启)。严格"同卡组 pinning / 组分发"与深度汇总仍开放;
 - 深度汇总(把 EvalScope 分数/bench rows 解析进 cmp.json);
 - 与 `fix-auto-work`/`compile-sglang` 组合做"改一个参数→自动对照验证"闭环。

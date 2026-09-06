@@ -56,8 +56,11 @@ spec 是 JSON 数组,**第一项放 baseline**(env/args 全空),后续每项只�
    bash "${AUTO_WORK:-/home/auto-work}/steps/cmp-sweep.sh" \
      --mode eval \
      --baseline-command "${BASELINE}" --spec "${CMP_SPEC}" \
-     [--datasets …] [--limit N] [--batch N] [--thinking true|false]
+     [--datasets …] [--limit N] [--batch N] [--thinking true|false] \
+     [--parallel N]   # 默认串行;用户明确要求"同时跑/并行 N 档"时才加
    ```
+   - **并行注意**:`--parallel N` 让至多 N 个变体同时跑(每档独立 start-server,自动等卡/锁卡);
+     并行时各档可能落在**不同卡组**,汇报须注明;要严格同卡组对照请保持串行(不传 --parallel);
    - 退出 0 → 全部 ok;退出 4 → 部分失败(cmp.json 已写);退出 2 → 输入/校验错(没启动任何服务);
 5. 读 `cmp.json`:按 `variants[]` 顺序,每项 `ok`/`run_result`/`result_json`/`release_result`;
    - `ok=false` 的变体单独说明原因(读其 start.out/run.out 或 result_json),**不许用缺失冒充 0 分**;

@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # ============================================================================
-# cmp-sweep.sh —— step: 单一变量对比的串行扫描驱动(cmp-eval / cmp-bench 共用)
+# cmp-sweep.sh —— step: 单一变量对比扫描驱动(cmp-eval / cmp-bench 共用)
 #
-# 职责:给定基线命令 + variants spec(或现成 variant 目录),为每个变体:
-#   start-server → run-eval / run-bench → release-server,逐一执行、失败隔离,
+# 职责:给定基线命令 + variants spec(或现成 variant 目录),为每个变体执行
+#   start-server → run-eval / run-bench → release-server,默认串行(--parallel 1),
+#   用户要求时按槽位并行(最多同时跑 --parallel 个变体),失败隔离,
 #   产 cmp.json(装配层:每变体 ok/失败 + 各产物路径 + 参数),不做分数解读。
+#
+# 并行语义:每个变体仍是独立 worker(start→run→release);并发由 start-server
+#   的等卡/锁卡/flock 保证不撞卡——槽位放满后,后续变体等最早 worker 结束再进。
+#   ⚠️ 并行时各变体实际落在不同卡组是正常现象,汇报须注明;要同卡组请用串行。
+#
 # 纪律:同一 workload 参数作用于所有变体(保证可比);仅用户声明的变量不同;
 #   任一变体命令 parser 校验失败 → 整体不启动(不浪费 GPU 做部分实验)。
 #
@@ -21,7 +27,7 @@
 #     --spec PATH                变体 spec JSON(见 lib/make_variants.py 头注释)
 #     --variant-dir DIR          直接使用现成变体目录(每子目录含 server_command.sh)
 #     --result-root PATH         本轮根父目录(默认 ${RUNS_DIR:-/home/runs})
-#     --parallel N               预留:v1 仅支持 1(串行),>1 报错
+#     --parallel N               并行变体数(默认 1=串行;正整数)
 #     --max-variants N           可选护栏:变体数上限
 #     --timeout-s N              透传给每个 run-* 的整体超时(秒)
 #     --datasets CSV             透传 run-eval(eval 模式)
@@ -60,7 +66,7 @@ CONCURRENCIES=""
 MULTIPLIER=""
 
 usage() {
-  sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//' >&2
 }
 
 while (($#)); do
@@ -92,7 +98,7 @@ done
 
 : "${RESULT_ROOT:=${RUNS_DIR:-/home/runs}}"
 PARALLEL=${PARALLEL:-1}
-[[ "$PARALLEL" == "1" ]] || { echo "错误:--parallel > 1 尚未实现(v1 只支持串行)" >&2; exit 2; }
+is_positive_integer "$PARALLEL" || { echo "错误:--parallel 必须为正整数" >&2; exit 2; }
 
 GEN="${GEN:-$SCRIPT_DIR/../lib/make_variants.py}"
 PARSER="${PARSER:-$SCRIPT_DIR/../lib/server_command_parser.py}"
@@ -147,7 +153,11 @@ if [[ -n "$MAX_VARIANTS" ]]; then
   is_positive_integer "$MAX_VARIANTS" || { echo "错误:--max-variants 必须为正整数" >&2; exit 2; }
   ((N <= MAX_VARIANTS)) || { echo "错误:变体数 $N 超过上限 $MAX_VARIANTS" >&2; exit 2; }
 fi
-log "cmp-${MODE}:共 ${N} 个变体 -> $ROOT"
+if ((PARALLEL > N)); then
+  log "提示:--parallel=$PARALLEL 大于变体数 $N,按 $N 生效"
+  PARALLEL=$N
+fi
+log "cmp-${MODE}:共 ${N} 个变体,并行度 ${PARALLEL} -> $ROOT"
 
 # ---------------- 统一校验(全部通过才启动任何服务) ----------------
 INVALID=()
@@ -163,8 +173,7 @@ if ((${#INVALID[@]} > 0)); then
 fi
 log "全部变体命令校验通过"
 
-# ---------------- 串行扫描 ----------------
-OK_ALL=1
+# ---------------- workload 参数(所有变体同一套) ----------------
 WORKLOAD_ARGS=()
 if [[ "$MODE" == "eval" ]]; then
   [[ -n "$DATASETS" ]] && WORKLOAD_ARGS+=(--datasets "$DATASETS")
@@ -178,37 +187,33 @@ else
 fi
 [[ -n "$TIMEOUT_S" ]] && WORKLOAD_ARGS+=(--timeout-s "$TIMEOUT_S")
 
-for ((idx = 0; idx < N; idx++)); do
-  label=${LABELS[$idx]}
-  vdir="$VARIANTS_ROOT/$label"
-  num=$((idx + 1))
-  log "[$num/$N] 变体:${label} 开始"
+# ---------------- 单个变体 worker(子 shell 运行;只写自己的 vdir,无共享可变状态) ----------------
+run_one_variant() {
+  local label=$1 num=$2 total=$3
+  local vdir="$VARIANTS_ROOT/$label"
+  local started_json run_result result_json release_result release_json
+  local ok=0 start_ok=0
 
-  # 1) 起服务
-  start_out=""
+  log "[$num/$total] 变体:${label} 开始(worker $$)"
+
+  # 1) 起服务(start-server 自行等卡/锁卡/选端口)
   if bash "$SCRIPT_DIR/start-server.sh" --server-command "$vdir/server_command.sh" --result-root "$vdir" >"$vdir/start.out" 2>&1; then
     started_json=$(locate_started_json "$vdir" || true)
     if [[ -z "$started_json" ]]; then
-      log "[$num/$N] ${label}:start-server 退出 0 但未找到 started.json,按启动失败处理"
+      log "[$num/$total] ${label}:start-server 退出 0 但未找到 started.json,按启动失败处理"
     fi
   else
     started_json=""
-    log "[$num/$N] ${label}:服务启动失败(见 $vdir/start.out)"
+    log "[$num/$total] ${label}:服务启动失败(见 $vdir/start.out)"
   fi
 
-  ok=0
-  start_ok=0
-  run_result=""
-  result_json=""
-  release_result=""
-  release_json=""
   if [[ -n "$started_json" ]]; then
     start_ok=1
     # 2) workload
     if bash "$RUN_STEP" --started-json "$started_json" "${WORKLOAD_ARGS[@]}" --result-root "$vdir" >"$vdir/run.out" 2>&1; then
       ok=1
     else
-      log "[$num/$N] ${label}:workload 失败(见 $vdir/run.out)"
+      log "[$num/$total] ${label}:workload 失败(见 $vdir/run.out)"
     fi
     result_json=$(find "$vdir" -maxdepth 2 -name "${MODE}.json" -print 2>/dev/null | sort | tail -n 1 || true)
     if [[ -n "$result_json" ]]; then
@@ -224,10 +229,7 @@ for ((idx = 0; idx < N; idx++)); do
     if [[ -n "$release_json" ]]; then
       release_result=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("result",""))' "$release_json" 2>/dev/null || true)
     fi
-  else
-    ok=0
   fi
-  ((ok == 1)) || OK_ALL=0
 
   # 每变体落 variant.json(确定性装配)
   python3 - "$vdir/variant.json" "$label" "$ok" "$start_ok" "$run_result" "$started_json" "$result_json" "$release_result" "$release_json" <<'PY'
@@ -258,18 +260,37 @@ obj = {
 with open(out, "w", encoding="utf-8") as f:
     json.dump(obj, f, ensure_ascii=False, indent=2)
 PY
-  log "[$num/$N] ${label}:ok=${ok} run_result=${run_result} release=${release_result}"
+  log "[$num/$total] ${label}:ok=${ok} run_result=${run_result} release=${release_result}"
+}
+
+# ---------------- 调度:槽位式并行(默认串行) ----------------
+ACTIVE=()
+i=0
+for label in "${LABELS[@]}"; do
+  i=$((i + 1))
+  # 槽位满:等最早启动的那个 worker 结束,腾出位置(保持启动顺序确定性)
+  while ((${#ACTIVE[@]} >= PARALLEL)); do
+    p=${ACTIVE[0]}
+    ACTIVE=("${ACTIVE[@]:1}")
+    wait "$p" 2>/dev/null || true
+  done
+  run_one_variant "$label" "$i" "$N" &
+  ACTIVE+=("$!")
 done
+for p in "${ACTIVE[@]}"; do
+  wait "$p" 2>/dev/null || true
+done
+log "全部变体已结束,开始汇总"
 
 # ---------------- 汇总 ----------------
 elapsed=$((SECONDS - START_SEC))
 printf '%s\n' "${LABELS[@]}" >"$ROOT/order.txt"
-python3 - "$ROOT" "$MODE" "$N" "$OK_ALL" "$elapsed" "$ROOT/cmp.json" <<'PY'
+python3 - "$ROOT" "$MODE" "$N" "$elapsed" "$ROOT/cmp.json" <<'PY'
 import json
 import os
 import sys
 
-root, mode, n, ok_all, elapsed, out = sys.argv[1:]
+root, mode, n, elapsed, out = sys.argv[1:]
 by_label = {}
 for label in os.listdir(os.path.join(root, "variants")):
     vj = os.path.join(root, "variants", label, "variant.json")
@@ -283,7 +304,7 @@ if os.path.exists(order_file):
 if not order:
     order = sorted(by_label)
 variants = [by_label[label] for label in order if label in by_label]
-result = "ok" if ok_all == "1" else "partial"
+result = "ok" if all(v.get("ok") for v in variants) else "partial"
 obj = {
     "result": result,
     "mode": mode,
@@ -296,7 +317,8 @@ with open(out, "w", encoding="utf-8") as f:
     json.dump(obj, f, ensure_ascii=False, indent=2)
 PY
 
-if ((OK_ALL == 1)); then
+RESULT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["result"])' "$ROOT/cmp.json")
+if [[ "$RESULT" == "ok" ]]; then
   echo "[cmp-sweep] STEP_RESULT=ok variants=$N root=$ROOT cmp_json=$ROOT/cmp.json"
   exit 0
 fi

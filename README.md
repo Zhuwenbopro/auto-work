@@ -115,7 +115,7 @@ profile: 另有 `no_trace`)。skill 只按 JSON 分流汇报,不猜日志。
 
 对照(cmp-eval / cmp-bench):
   用户语 → spec JSON(env/args 增量)→ cmp-sweep --mode eval|bench
-    → 生成并校验全部变体 → 串行:每变体 start→run-*→release(失败隔离)→ cmp.json
+    → 生成并校验全部变体 → 每变体 start→run-*→release(失败隔离;默认串行,--parallel N 并行)→ cmp.json
 ```
 
 行为权威(测试部门脚本,整份搬运进 `lib/`,不许"顺手改进"):EvalScope 调用形状/数据集
@@ -189,7 +189,7 @@ cp -r /home/auto-work/skills/* /sgl/.dsh-home/skills/   # 改了任何 skill 后
 
 ## 9. 开放问题 / 下一步候选
 
-- [ ] cmp-sweep `--parallel N`(GPU 组分发并发起服,承接旧 compare-eval 的 dispatch 语义)
+- [x] cmp-sweep `--parallel N`:默认串行,用户要求时槽位并行(每档独立 start-server 自动等卡/锁卡);并行时各档卡组可能不同,严格同卡组 pinning 留作后续
 - [ ] cmp 深度汇总(把 EvalScope 分数 / bench rows 直接解析进 cmp.json)
 - [ ] 服务器冒烟验证三条 cmp 链路后,再评估从 `Zhuwenbopro/skills` 仓库**择机删除**旧 automation(已停用,保留对照)
 - [ ] 探索 0.1.3+ 的 workflow 子系统做更复杂的本地编排
