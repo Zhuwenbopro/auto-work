@@ -76,6 +76,8 @@ bash "${AUTO_WORK:-/home/auto-work}/steps/run-bench.sh" \
 
 ## 纪律
 
+> 0. **选卡是代码职责**:start-server 负责等卡/锁卡/选端口/注入 `HIP_VISIBLE_DEVICES`(parser 会覆盖命令文件里的设备与端口)。本任务**禁止自行探测 GPU(rocm-smi)、读取 step 实现、猜测或改动设备变量**;前置只需 `echo ok` + 命令文件 parser 校验 + (声明已有服务时)确认 started.json。
+
 1. 只按 `bench.json` / `release.json` 分流,不猜日志;命令照抄 step;
 2. 不修改 `lib/bench_serving.sh`;不把短 served 名当 tokenizer;
 3. 服务是稀缺资源:模式 A 默认压完停服释放;保留只在用户明确要求时;
