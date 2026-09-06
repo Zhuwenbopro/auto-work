@@ -398,7 +398,8 @@ emit_ok() {
     gpus_csv "$selected_csv" \
     health_url "http://${HEALTH_HOST}:${PORT}/health" \
     server_log "$SERVER_LOG" run_dir "$RUN_DIR" \
-    model_name "$MODEL_NAME" started_at "$(date -Is)" elapsed_s "$elapsed"
+    model_name "$MODEL_NAME" model_path "$MODEL_PATH" \
+    started_at "$(date -Is)" elapsed_s "$elapsed"
   log "SGLang 服务健康检查通过:http://${HEALTH_HOST}:${PORT}(pid=$SERVER_PID, pgid=$SERVER_PGID)"
   echo "[start-server] STEP_RESULT=OK pid=$SERVER_PID pgid=$SERVER_PGID port=$PORT gpus=$selected_csv server_log=$SERVER_LOG run_dir=$RUN_DIR"
 }

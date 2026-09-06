@@ -113,21 +113,15 @@ bash "${AUTO_WORK:-/home/auto-work}/steps/curl-smoke.sh" \
 ```
 
 2. 读同目录 `smoke.json` 的 `verdict`(`ok|garbled|empty|http_error|json_error`)与 `content` 样例;
-3. **`verdict == ok`(测试通过)→ 最后退出服务、释放占用的卡,再汇报**(不再保留运行中的服务):
-   - 读成功轮 `started.json` 的 `pid`/`pgid`/`gpus_csv`;
-   - 停掉该服务进程组(沿用 start-server 的清理语义 TERM → 最多等 15s → KILL,照抄不要改):
+3. **`verdict == ok`(测试通过)→ 用 release-server step 退出服务、释放占用的卡,再汇报**(不再保留运行中的服务):
+   - 执行(固定命令,照抄不要改):
      ```bash
-     PID=<started.json.pid>; PGID=<started.json.pgid>
-     if [[ "$PGID" =~ ^[0-9]+$ && "$PGID" != "$(ps -o pgid= -p $$ | tr -d ' ')" ]]; then
-       TARGET="-$PGID"
-     else
-       TARGET="$PID"          # PGID 记录失效时退化为按 PID 停
-     fi
-     kill -TERM -- "$TARGET" 2>/dev/null || true
-     # 随后每秒 kill -0 -- "$TARGET" 检查一次,≤15s 仍存活则 kill -KILL -- "$TARGET"
+     bash "${AUTO_WORK:-/home/auto-work}/steps/release-server.sh" \
+       --started-json <成功轮 attempt.json.started_json 的值>
      ```
-   - GPU/端口锁 fd 由服务进程组继承自 start-server:进程退出即自动释放(flock 随 fd 关闭释放,**锁文件不删除**),无需额外操作;
-   - 停服后用 `rocm-smi` 复核 `gpus_csv` 内各卡显存/利用率已回落,确认卡已释放;
+   - 读同目录 `release.json` 的 `result`(`released` / `already_gone` / `failed`)与 `gpus_state`;
+   - GPU/端口锁 fd 由服务进程组继承自 start-server:进程退出即自动释放(flock 随 fd 关闭释放,**锁文件不删除**);release-server 已封装停服(TERM→宽限→KILL)与 `rocm-smi` 复核,不再手写 kill;
+   - `result == failed` → 按失败汇报(release.json 路径 + 原因),原地退出;
    - 汇报注明**服务已退出、GPU 已释放**(pid/pgid 只作历史记录,不再是运行中的服务)。
 4. `verdict != ok`(garbled/empty/http_error/json_error)→ 维持原行为:服务**保持运行不清理**(汇报 PGID 即可),留待继续排查。
 

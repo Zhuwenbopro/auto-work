@@ -82,7 +82,9 @@ FAILURE_LOG_LINES         # 失败时日志摘录行数(默认 100)
   ```json
   { "result": "ok", "pid": 12345, "pgid": 12345, "port": 30123,
     "gpus": [0, 2], "health_url": "http://127.0.0.1:30123/health",
-    "server_log": ".../server.log", "started_at": "...", "elapsed_s": 42 }
+    "server_log": ".../server.log", "run_dir": "...",
+    "model_name": "Qwen3-8B", "model_path": "/models/Qwen3-8B",
+    "started_at": "...", "elapsed_s": 42 }
   ```
 - `failed.json`(非 OK 时):`{ "result": "fatal|timeout|retryable", "stage": "parse|acquire|reserve-port|launch|health", "server_log": "...", "error": "<首错摘录,≤FAILURE_LOG_LINES 行>" }`
 
