@@ -1,130 +1,124 @@
-# auto-work —— 服务器侧 headless DSH 自动工作方案(设计讨论记录)
+# auto-work —— 服务器侧 headless DSH 的自动化执行框架
 
-> 创建于 2026-09,基于本地会话"接 HANDOFF 后如何构建自动工作方案"的多轮讨论。
-> 相关:上一阶段落地文档见 `../dsh-server-setup/`;工作总结技能仓库(本地克隆)见 `../skills/`(远端 `github.com/Zhuwenbopro/skills`)。
-> 本文档记录**已达成共识的框架**与**尚未拍板的开放问题**,是后续实现的蓝本。
+> 目标:在服务器容器里基于 DSH **headless**(一次一任务、跑完即退)构建可复用的自动化执行框架:
+> 把"启动服务 / 编译 / 版本适配 / 自我维护"这类工作做成 **确定性 step + 薄 skill**,让 harness 用一句话就能稳定执行,
+> 并保证每个动作可验证、可留痕、可回退。
 
 ---
 
-## 1. 背景与目标
+## 1. 设计要点(简短)
 
-- 环境 A(服务器):VSCode Remote + 临时 Docker 容器,做 sglang 在**海光 DCU** 上的算子适配/框架调优/bug 解决。镜像内网构建不可改;`/sgl` = host `/public/home/zhuwenbo`,跨容器持久共享。
-- 服务器容器内已装 DSH **headless**(0.1.2-rc.1,`dsh --profile headless "任务"`,一次一任务、跑完即退、0=完成 1=出错),API key 与 profile 修复均已固化(见 dsh-server-setup/HANDOFF.md)。
-- **本方案目标**:在"一次一任务、无 GUI、无交互追问"的 headless 之上,构建**自动化工作方案**——让多步工作(性能调优、bug 分析、批量评测/压测)能够按预定义的路线稳定、可续跑地执行,而非依赖单次对话的临场发挥。
+- **层级**:`step`(原子,零 LLM,exit code/产物判定)← `task`(step 组合,薄 LLM)← `skill`(task+分析决策,LLM 编排)。
+  本仓库当前以 **step + skill** 两层为主(task 提示词那套 wrapper 形态已废弃)。
+- **确定性优先**:所有机械动作(启动、采样证据、推进判定、乱码判定、清理)都写成确定性 step,LLM 只做需要理解代码/意图的一步。
+- **一次一任务**:headless 每个进程只干一件事;跨轮记忆/证据走文件(每轮产物目录 + 台账)。
+- **执行形态 = DSH 原生 skill**:skill 放进 `$DSH_HOME/skills/<name>/SKILL.md`,headless 按 description 自动加载,无需 wrapper/长路径。
+- 权限前提:headless 执行 bash 需要 `DSH_PERMISSION_MODE=danger-full-access`(一次性容器内使用)。
 
-## 2. 本质问题:如何让 agent 的行动路线"严格确定"
+## 2. 当前仓库结构
 
-- agent 本质是 **LLM 驱动循环**:每轮由模型决定调用什么工具/怎么调。**skill 只是压缩单步不确定性的指令+CLI 工具包**,不能保证"路线"确定。
-- 要让路线严格确定,拓扑必须放到**模型之外**的编排层。
-- DSH 现成机制(查证自本地 deepseek-harness checkout,`docs/subsystems/workflow.md`):
-  - **workflow 子系统** = "脚本即拓扑":一段 JS 脚本在独立 worker 里执行,控制流完全由代码决定;叶子 = `agent()` 子代理(支持 JSON Schema 结构化输出校验);失败纪律硬性——叶子失败得 `null`(可编程处理),**误用钩子 `fatal` 直接杀死 run**,不静默降级。
-  - **诚实边界**:路由可以严格;叶子(agent)内部推理仍非确定——不确定性只能被"圈住"(schema/exit code/固定输出契约/checkpoint),不能被消灭。
-  - **版本/形态差异**:服务器是 0.1.2rc1 headless,比本地 checkout(0.1.3-alpha.1)旧;workflow 工具是否可用必须服务器实测(`dsh --profile headless --dump-config`),不能拿本地文档直接套。
+```
+auto-work/                       # 代码根(默认部署到容器 /home/auto-work)
+├─ config.env                    # ★ 部署配置(代码根/运行时根/DSH 根),环境变量可覆盖
+├─ README.md
+├─ lib/
+│  └─ server_command_parser.py   # sglang 启动命令的解析/校验/执行核心(step 自动发现)
+├─ steps/                        # 确定性 step(零 LLM,可单独跑)
+│  ├─ start-server.sh            #   单次真实启动:等卡→锁卡→选端口→起服务→等 /health
+│  ├─ adapt-attempt.sh           #   适配循环的单次"启动+证据采集"(产 attempt.json)
+│  ├─ curl-smoke.sh              #   启动成功后 curl 冒烟 + 确定性乱码判定(smoke.json)
+│  ├─ compile-sglang.sh          #   编译安装 sglang-das(支持 async/wait,缺 rust 自愈重试一次)
+│  ├─ examples/server_command.example.sh
+│  └─ start-server.md            #   start-server step 的契约文档
+└─ skills/                       # DSH 原生技能(安装到 $DSH_HOME/skills 后被 headless 自动发现)
+   ├─ start-server/SKILL.md      #   用给定命令启动 SGLang 服务并汇报(PID/端口/GPU/日志)
+   ├─ compile-sglang/SKILL.md    #   编译/安装 sglang(默认源码 /home/sglang-das)
+   ├─ adapt-start/SKILL.md       #   新版本启动适配循环(照 origin/v0.5.12_dev 移植 → 能启动 → curl 验乱码)
+   └─ fix-auto-work/SKILL.md     #   自我维护:改 auto-work 自身文件并同步到技能安装目录
+```
 
-## 3. 两种实现档位
+## 3. 运行时布局(代码根与运行产物分离)
 
-| 档位 | 做法 | 适用 | LLM 角色 |
-|---|---|---|---|
-| **档 1:外部严格驱动器** | 服务器上普通 bash/python 把拓扑写成显式状态机:每节点 = 一次 headless 调用或脚本;节点结果 = exit code + 结构化输出;转移代码写死(成功→X,失败→恢复节点Y/记卡点/回报) | 生命周期/流水线机械、可枚举成功失败的工作(GPU 评测、压测、编译、对照实验调度) | 只在节点内部执行,路由零 LLM |
-| **档 2:workflow/编排编排** | 本地侧用 workflow 工具或子代理做分析→决策→派活;或带护栏的战役主循环 | 推理/分析为主的工作(调优决策、bug 调查) | 编排与分析是 LLM |
-
-两者可组合:**拓扑(下一步谁决定)放驱动器/编排,推理(单步怎么干)放叶子**。
-
-## 4. 工作层级:step / task / skill(已共识的框架)
-
-三层本质是按 **LLM 密度从下往上递增** 划分;确定性随层上升而下降,契约决定层间通信。
-
-| 层 | 定义 | LLM 角色 | 确定性 | 落地形态 |
-|---|---|---|---|---|
-| **step** | 原子步:一个命令/脚本可完成的确定性事件(如起一个 server、跑某个 python 文件、锁卡、健康检查) | **零 LLM** | 完全确定(exit code / 机器可读产物判定) | 纯代码叶子,可测试 |
-| **task** | 多个 step 组成的目标(如 tracing、bench-serving、eval) | **薄 LLM**,只在入口(自然语言意图→参数/命令文件)与出口(读结果→报告) | 中间路由由代码/exit code 决定 | 一次 headless 自包含调用(任务提示词 + step 清单),或纯脚本同步跑 |
-| **skill** | 若干 task + 分析决策组成的工作(如性能调优、错误分析) | **核心 LLM**:读结果、判断、决定下一个 task | 只确定"契约与门禁",路线开放 | 战役:STATE + 多轮 headless;或本地 workflow 编排 |
-
-### 边界规则(防止层级塌陷,必须遵守)
-
-1. **层间只传契约,不传散文**:step→task 传 exit code+产物(日志标记/JSON/CSV);task→skill 传结构化结果对象;skill 的判断必须基于下层验证事实,不许拿"我觉得"当证据。
-2. **step 内不允许 LLM 决策**(出现"如果…就智能判断"说明它其实是 task,要下沉);**task 不允许把 step 失败消化成成功**(沿用 DSH workflow 失败纪律:失败→记录→按预定失败分支走,不静默继续)。
-3. **step 必须可重跑**(幂等或可断点):长 step(如压测数小时)+ 临时容器 ⇒ 需要 task 级 journal(跑到第几步、产物在哪),中断可续。
-
-## 5. 现有工作总结技能仓库的归类(重命名结论)
-
-`github.com/Zhuwenbopro/skills`(已克隆到 `../skills/`)——原仓库把 8 个都叫 "skill",按新层级大部分实为 **task**:
-
-| 仓库原名 | 新层级 | 归类理由 |
+| 位置 | 默认值 | 内容 |
 |---|---|---|
-| `eval` | **task**(档 1) | GPU 等锁→起服务→EvalScope→清理;525 行 auto_eval.sh 已把成败编进 exit code/日志标记;skill 层薄壳 |
-| `bench-serving` | **task**(档 1) | 同上,共享同一生命周期核心 |
-| `tracing` | **task**(档 1) | 同上,关 CUDA graph 采 trace |
-| `compile-sglang` | **task**(档 1,可去 LLM) | 纯命令链 + 验证,无 GPU 仲裁/服务生命周期 |
-| `compare-eval` | **task**(档 1 + 薄 LLM) | 并发调度/汇总是确定性驱动器(dispatch_plan.sh);生成变体命令与 plan.json、读 summary 下结论需 LLM |
-| `experimental-bug-investigation` | **skill**(档 2) | 复现→假设→实验→根因→修复→验证;开放拓扑靠门禁(先复现才能写根因、先验证才能写已证实)+ 报告账本纪律收敛 |
-| `bug-experience-writing` | skill 内**子 task**(档 2 规则门禁) | 把已验证结论蒸馏成经验条目;主要是 rubric 检查 + 一小步摘要 |
-| `hello-skill` | 忽略/删 | 演示用 |
+| 代码根 `AUTO_WORK` | `/home/auto-work` | 上面的仓库内容(部署用 git clone/pull) |
+| 运行时根 `RUNS_DIR` | `/home/runs` | 每轮请求一个目录: `server_command.sh` + step 结果(`start-<ts>/…`、`attempt.json`、`record.md`、`change.diff` 等) |
+| DSH 配置根 `DSH_HOME` | `/sgl/.dsh-home` | 技能安装目录 `skills/<name>/SKILL.md`、profiles、key |
+| dsh 环境文件 `DSH_ENV_FILE` | `/sgl/dsh-env.sh` | 含 `DSH_PERMISSION_MODE=danger-full-access` |
 
-### 目标仓库布局草案
+切换全部走环境变量 > `config.env` > 内置默认;代码里不留写死运行时路径。
 
-```
-auto-work/
-  steps/    # 纯代码叶子(无 LLM、可测试):等卡、起服务、健康检查、跑评测、清理…
-  tasks/    # 每个 = 自包含任务提示词模板 + 引用的 step/自动化:
-            #   eval、bench-serving、tracing、compile-sglang、compare-eval
-  skills/   # 每个 = 战役定义 + STATE 模板 + 决策规则:
-            #   perf-tuning(性能调优)、bug-investigation(错误分析)
-```
+## 4. 技能清单与触发
 
-- **task 层**放服务器:一次 headless 调用跑一个 task;或纯脚本同步跑。
-- **skill 层**看情况:主循环在本地(我)每轮派活+分析,服务器只执行 task;或主循环也在服务器(驱动器 + STATE.md + 轮数/预算护栏),挂那自动连跑。
+安装:把 `skills/*` 拷到 `$DSH_HOME/skills/`(名字全局唯一、kebab-case)。headless 消息里点名技能最稳:
+"用 **<技能名>** 技能:<要做的事>"。description 也支持自动匹配。
 
-## 6. 移植时必须处理的关键差异(单次任务化)
+| 技能 | 一句话用途 | 依赖 step | 典型触发 |
+|---|---|---|---|
+| `start-server` | 用给定命令(内联或 `/home/server_command.sh`)启动服务并汇报 | start-server | `用 start-server 技能启动服务,命令用 /home/server_command.sh` |
+| `compile-sglang` | 编译安装 sglang-das(镜像已含依赖,不装 requirements) | compile-sglang | `用 compile-sglang 技能编译 sglang` |
+| `adapt-start` | 新版本启动报代码错误 → 照 `origin/v0.5.12_dev` 移植 → 循环到能启动 → curl 验乱码 | adapt-attempt + start-server + curl-smoke | `用 adapt-start 技能:适配当前 sglang 让它能启动,命令用 /home/server_command.sh` |
+| `fix-auto-work` | 改 auto-work 自身(skill/task/step/config)并同步安装目录 | —(文件操作) | `用 fix-auto-work 技能:以后 start-server 没贴命令时直接用 /home/server_command.sh` |
 
-现有 SKILL.md 是为**对话式、可跨轮**的 Copilot 写的("启动→回报 PID→之后轮次再查状态/叫停")。headless 一次一任务,须改为:
+start-server 结果码:`0 OK / 2 输入错 / 3 RETRYABLE / 4 FATAL / 5 TIMEOUT`;产物 `started.json`(成功交接 PID/PGID/端口/GPU/日志)或 `failed.json`(stage/error/日志路径)。成功时服务保持运行、锁归服务进程,停止用 `kill -TERM -<PGID>`。
 
-- 每个 task = **自包含提示词模板**(像 dsh-server-setup/templates/task-prompt.md),指路到固定 automation 目录;需要 LLM 判断的只有命令提取/参数映射/结果解读。
-- 起后台 worker + journal,"查状态/叫停" = 另开一次 headless 任务读文件;或 bash 层提供**同步模式**(跑到完成/失败,exit 0/1,一次给最终总结)。
-- 环境注意:服务器脚本 LF 行尾、UTF-8 编码(本地 Windows 控制台直读中文会乱码,读文件用 UTF-8)。
-
-## 7. 开放问题(尚未拍板)
-
-1. 顶层叫 **skill** 是否会与 DSH 自身"skill 目录/工具包"语义冲突?复用该名还是改叫 campaign/战役?
-2. 旧仓库"大部分是 task"的重命名结论是否认可?(决定是否重组仓库目录)
-3. task 内"薄 LLM"到底出现在哪几个点,需要以样板验证;先拿 `eval`(档 1 参考实现)还是 `bug-investigation`(档 2 样板)验证层级?
-4. 服务器 0.1.2rc1 headless 实际挂了哪些工具(workflow/skill/subagent 是否存在)→ 需 `--dump-config` 实测后定档。
-5. skill 主循环放本地还是服务器?(关联"本地能否 ssh 直驱/或沿用粘贴协作"的旧问题)
-
-## 8. 下一步候选
-
-- [ ] `dsh --profile headless --dump-config` 实测服务器 headless 工具面,给档位定案
-- [ ] 按样板 task 改造 `eval`:拆 step 清单 + 写自包含任务提示词,验证全链路
-- [ ] 依样板推广到其余 GPU 类 task(bench-serving/tracing/compile-sglang/compare-eval)
-- [ ] 设计 `bug-investigation` skill 的战役形态(门禁+STATE+经验库),作为档 2 样板
-- [ ] 把本框架落成 auto-work 仓库结构(上述布局草案),skill 与 task 分层入库
-
-## 9. 当前 auto-work 布局与部署切换
+## 5. adapt-start 的工作方式(核心战役技能)
 
 ```
-auto-work/                          # 部署在容器 /home/auto-work(代码根)
-  config.env                        # ★ 部署配置:改这里或调用时用环境变量覆盖
-  lib/server_command_parser.py      # 命令校验/执行核心(step 通过 ../lib 自动发现)
-  steps/start-server.sh             # step:启动 SGLang 服务(等卡→锁卡→选端口→健康检查)
-  steps/examples/server_command.example.sh
-  tasks/start-server.task.md        # 形态 B 任务提示词(harness 读)
-  scripts/run-start-server.sh       # 形态 B 入口(拼提示词+请求→dsh headless)
-  skills/start-server/SKILL.md      # DSH 原生 skill(拷到 $DSH_HOME/skills 后被自动发现)
-                                        # 代码根之外,不再生成运行时目录
-
-/home/runs/                         # 运行时数据根(独立于代码根;默认 /home/runs,可用 RUNS_DIR 覆盖)
-  <时间戳>/                         # 每轮请求一个目录:server_command.sh + step 结果(start-<t>/)。
-                                    # 原 work/ 与 runs/ 两个目录已合并于此,auto-work 下不再生成。
+循环(≤ MAX_ITER=15):
+  adapt-attempt.sh(每轮)→ attempt.json{ok,stage,signature,sglang_file:sglang_line,server_log,started_json,failed_json}
+  判定(只按 JSON 字段):
+    ok            → curl-smoke 判乱码 → 汇报(服务保持运行)
+    非代码类失败  → 原地退出汇报
+    无进展/循环(signature 与任一历史轮重复)→ git checkout 回退本轮改动 → 原地退出汇报
+  有进展 → 移植:git show origin/v0.5.12_dev:<文件> → edit 单点最小修改 → 记录 → 下一轮
+产物:RUNS_DIR/adapt-<ts>/
+      MODIFICATIONS.md(总台账:编号|问题/日志|方案 diff|验证结果)
+      iter-NNN/{server_command.sh, start-*/…, attempt.json, record.md, change.diff}
+纪律:绝不 git commit;改动只留 /home/sglang-das 工作区 diff;每轮必须有真实启动证据。
 ```
 
-**部署与切换(不再改代码)**:优先级 = 调用时环境变量 > `config.env` > 内置默认。
+## 6. 服务器部署与使用
 
 ```bash
-# 默认:AUTO_WORK=/home/auto-work;RUNS_DIR=/home/runs;DSH_HOME/DSH_ENV_FILE 仍在 /sgl(/sgl/.dsh-home,/sgl/dsh-env.sh)
-export AUTO_WORK=/custom/auto-work          # 只换 auto-work 位置
-export RUNS_DIR=/home/runs                  # 只换运行时数据根(默认 /home/runs,即原 work/+runs/ 合并处)
-export DSH_ENV_FILE=/sgl/dsh-env.sh         # dsh 环境文件
-bash "${AUTO_WORK:-/home/auto-work}/scripts/run-start-server.sh" "..."
+# 1) 部署代码根(容器内)
+git clone https://github.com/Zhuwenbopro/auto-work.git /home/auto-work
+# 或已存在则更新: cd /home/auto-work && git pull
+
+# 2) 前置
+#    执行权限(dsh-env.sh 里应已含):
+grep DSH_PERMISSION_MODE /sgl/dsh-env.sh   # → export DSH_PERMISSION_MODE=danger-full-access
+#    命令源(可选,供 start-server/adapt-start 复用):
+test -f /home/server_command.sh
+
+# 3) 安装技能(headless 每次新进程才看到;代码根与技能目录是两处)
+cp -r /home/auto-work/skills/* /sgl/.dsh-home/skills/
+
+# 4) 探针
+dsh --profile headless "列出你的技能目录里的技能名称"
+
+# 5) 触发(示例)
+cd /home
+dsh --profile headless "用 start-server 技能启动服务,命令用 /home/server_command.sh"
+dsh --profile headless "用 adapt-start 技能:适配当前 sglang 让它能启动,命令用 /home/server_command.sh"
 ```
 
-> 说明:step 脚本自身可移植(`../lib` 自动发现 parser);启动健康等待上限默认 3600s(1h,超时即 TIMEOUT);任务提示词与 skill 里保留了 `/home/auto-work` 代码默认值与 `/home/runs` 运行时默认值,但均写明"以消息中的本轮参数 / 环境变量为准",由 wrapper 注入实际路径。
+## 7. Git 工作流(保持三处一致:GitHub = 源,本地 = 编辑,服务器 = 执行)
+
+```bash
+# 本地改完发布:
+git -C auto-work add -A && git -C auto-work commit -m "..." && git -C auto-work push
+
+# 服务器更新:
+cd /home/auto-work && git pull
+cp -r /home/auto-work/skills/* /sgl/.dsh-home/skills/   # 改了任何 skill 后都要重装
+```
+
+> 坑:改了技能但忘了拷到 `/sgl/.dsh-home/skills/`,headless 仍用旧版;改了 step 但忘了 commit/pull,服务器用旧 step——两边契约会悄悄不一致。
+
+## 8. 开放问题 / 下一步候选
+
+- [ ] 把 `start-server` 之外的旧工作总结(zhangwobopro/skills 仓库的 eval/bench-serving/tracing/compare-eval)按本框架移植成 step+skill
+- [ ] `release-server` 等配套 step/技能(按 started.json 的 PGID 停服务、确认端口/GPU 释放)
+- [ ] 探索 0.1.3+ 的 workflow 子系统做更复杂的本地编排
+- [ ] 长调优战役(性能调优)状态文件化,复用 step/skill 分层
