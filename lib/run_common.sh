@@ -65,6 +65,22 @@ PY
   printf '%s\n' "${pgid:-$pid}"
 }
 
+# target_live <target>:target 形如 "-PGID"(进程组)或 "PID"。
+# 判定目标是否仍有"非僵尸"存活成员:kill -0 对僵尸也返回真,必须查 ps stat
+# (僵尸首字符为 Z,视为已死)。
+target_live() {
+  local t=$1 line
+  if [[ "$t" == -* ]]; then
+    while IFS= read -r line; do
+      [[ -n "${line:0:1}" && "${line:0:1}" != Z ]] && return 0
+    done < <(ps -g "${t#-}" -o stat= 2>/dev/null || true)
+    return 1
+  fi
+  kill -0 "$t" 2>/dev/null || return 1
+  line=$(ps -o stat= -p "$t" 2>/dev/null | tr -d ' ')
+  [[ -n "$line" && "${line:0:1}" != Z ]]
+}
+
 # terminate_process_group <name> <pid> <pgid> <timeout_s>:
 # TERM -> 每 1s 轮询 -> 超时 KILL -> wait。pgid 非数字或 == 自身时退化为单 PID。
 terminate_process_group() {
@@ -77,14 +93,14 @@ terminate_process_group() {
   else
     target="$pid"
   fi
-  if kill -0 -- "$target" 2>/dev/null; then
+  if target_live "$target"; then
     log "停止${name}:PID=${pid},PGID=${pgid}"
     kill -TERM -- "$target" 2>/dev/null || true
     deadline=$((SECONDS + timeout_s))
-    while kill -0 -- "$target" 2>/dev/null && ((SECONDS < deadline)); do
+    while target_live "$target" && ((SECONDS < deadline)); do
       sleep 1
     done
-    if kill -0 -- "$target" 2>/dev/null; then
+    if target_live "$target"; then
       log "${name}未在 ${timeout_s}s 内退出,发送 KILL"
       kill -KILL -- "$target" 2>/dev/null || true
     fi

@@ -33,6 +33,8 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/../lib/run_common.sh"
 
 # ---------------- 参数解析 ----------------
 STARTED_JSON=""
@@ -99,31 +101,31 @@ SELF_PGID=$(python3 -c 'import os; print(os.getpgrp())')
 RESULT="failed"
 TARGET=""
 
-# ---------------- 停服(沿用 start-server 清理语义) ----------------
+# ---------------- 停服(沿用 start-server 清理语义;僵尸视为已死) ----------------
 if [[ "$SERVER_PGID" =~ ^[0-9]+$ && "$SERVER_PGID" != "$SELF_PGID" ]]; then
   TARGET="-$SERVER_PGID"
 else
   TARGET="$SERVER_PID"
 fi
 
-if kill -0 -- "$TARGET" 2>/dev/null; then
+if target_live "$TARGET"; then
   log "停止 SGLang Server:PID=${SERVER_PID},PGID=${SERVER_PGID}"
   kill -TERM -- "$TARGET" 2>/dev/null || true
   deadline=$((SECONDS + SHUTDOWN_TIMEOUT))
-  while kill -0 -- "$TARGET" 2>/dev/null && ((SECONDS < deadline)); do
+  while target_live "$TARGET" && ((SECONDS < deadline)); do
     sleep 1
   done
-  if kill -0 -- "$TARGET" 2>/dev/null; then
+  if target_live "$TARGET"; then
     log "SGLang Server 未在 ${SHUTDOWN_TIMEOUT}s 内退出,发送 KILL"
     kill -KILL -- "$TARGET" 2>/dev/null || true
     sleep 1
   fi
-  if kill -0 -- "$TARGET" 2>/dev/null; then
+  if target_live "$TARGET"; then
     log "错误:SGLang Server 在 TERM+KILL 后仍存活(pid=${SERVER_PID})"
     RESULT="failed"
   else
     RESULT="released"
-    log "SGLang Server 已停止"
+    log "SGLang Server 已停止(含僵尸进程判定)"
   fi
 else
   RESULT="already_gone"
