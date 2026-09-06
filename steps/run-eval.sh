@@ -122,7 +122,7 @@ read_started_json "$STARTED_JSON"
 : "${EVAL_ENABLE_THINKING:=false}"
 : "${EVAL_BATCH:=64}"
 : "${EVAL_LIMIT:=None}"
-: "${EVAL_DATASETS:=humaneval}"
+: "${EVAL_DATASETS:=humaneval,math_500,gsm8k}"   # 默认三集;用户点名则只测点名集
 
 THINKING=${THINKING:-$EVAL_ENABLE_THINKING}
 case "$THINKING" in

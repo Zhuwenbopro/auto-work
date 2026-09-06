@@ -16,8 +16,8 @@ whenToUse: '需要对一个 sglang 服务命令做准确率评测(开箱数据�
   - `release-server.sh`(收尾;产物 `release.json`)
 - **`RUNS_DIR` 默认 `/home/runs`**;本轮根:`EVAL_ROOT = ${RUNS_DIR}/eval-<时间戳>/`
 - 命令源:用户内联 sglang 命令 > `/home/server_command.sh`
-- 评测参数默认:`EVAL_DATASETS=humaneval`、`EVAL_BATCH=64`、`EVAL_LIMIT=None`(全量)、`EVAL_ENABLE_THINKING=false`;用户给了以用户为准
-- 注意:数据集名**原样透传**给 eval_command.sh(不自动改写 math500;非法字符/重复由 step 报输入错)
+- 评测参数默认:`EVAL_DATASETS=humaneval,math_500,gsm8k`(**三个都测**)、`EVAL_BATCH=64`、`EVAL_LIMIT=None`(全量)、`EVAL_ENABLE_THINKING=false`;**用户点名了数据集 → 只测点名的那个/那几个**,其余以用户为准
+- 数据集命名:step 层不做改写;请求里说 `math500` 时由你归一为 `math_500` 再传给 `--datasets`,其余名字原样透传;非法字符/重复由 step 报输入错
 
 ## 前置(任一不满足 → "输入错误"汇报退出)
 
